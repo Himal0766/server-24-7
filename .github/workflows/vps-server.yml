@@ -1,0 +1,84 @@
+name: Persistent Pterodactyl VPS
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'   # Restart every 6 hours
+  workflow_dispatch:
+
+jobs:
+  vps:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 356   # 5h 56m
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ---------------- RESTORE BACKUP ----------------
+      - name: Download Backup
+        uses: actions/download-artifact@v4
+        with:
+          name: ptero-backup
+          path: /tmp/backup
+        continue-on-error: true
+
+      - name: Restore Backup
+        run: |
+          if [ -f /tmp/backup/backup.tar.gz ]; then
+            sudo tar -xzf /tmp/backup/backup.tar.gz -C /
+            echo "Backup restored"
+          else
+            echo "No backup found"
+          fi
+
+      # ---------------- SYSTEM UPDATE (YOUR CMD) ----------------
+      - name: Update System
+        run: |
+          sudo apt update
+          sudo apt upgrade -y
+
+      # ---------------- INSTALL CLOUDFLARED ----------------
+      - name: Install Cloudflared
+        run: |
+          sudo mkdir -p --mode=0755 /usr/share/keyrings
+          curl -fsSL https://pkg.cloudflare.com/cloudflare-public-v2.gpg | sudo tee /usr/share/keyrings/cloudflare-public-v2.gpg >/dev/null
+          echo 'deb [signed-by=/usr/share/keyrings/cloudflare-public-v2.gpg] https://pkg.cloudflare.com/cloudflared any main' | sudo tee /etc/apt/sources.list.d/cloudflared.list
+          sudo apt update
+          sudo apt install -y cloudflared
+
+      - name: Start Cloudflare Tunnel
+        run: |
+          sudo cloudflared service install eyJhIjoiMGViNjE3Y2Q5NzA3ZmU5ZGU0MjJiOGYxZTc4NDc0NTIiLCJ0IjoiNWI5MDVlYmUtMTFlZC00OTQ1LTg5N2EtMzk5ZDVlZDI5NTA4IiwicyI6IlkyUm1PR1kxTkdFdE5XVTRNeTAwWTJSaExUZ3lPR1l0TWpaaVpqY3laREZrTUdSbSJ9 || true
+
+      # ---------------- ROOT PASSWORD ----------------
+      - name: Set root password
+        run: echo "root:nissalnodes" | sudo chpasswd
+
+      # ---------------- SSH ACCESS ----------------
+      - name: Start tmate
+        uses: mxschmitt/action-tmate@v3
+
+      # ---------------- KEEP ALIVE ----------------
+      - name: Keep VPS Alive
+        run: sleep 21360   # 5h 56m
+
+      # ---------------- BACKUP PTERODACTYL ----------------
+      - name: Backup Pterodactyl & System
+        run: |
+          sudo mkdir -p /backup
+          sudo tar --exclude=/proc \
+                   --exclude=/sys \
+                   --exclude=/dev \
+                   --exclude=/tmp \
+                   -czf /backup/backup.tar.gz \
+                   /etc/pterodactyl \
+                   /var/lib/pterodactyl \
+                   /var/www/pterodactyl \
+                   /root
+
+      # ---------------- UPLOAD BACKUP ----------------
+      - name: Upload Backup
+        uses: actions/upload-artifact@v4
+        with:
+          name: ptero-backup
+          path: /backup/backup.tar.gz
